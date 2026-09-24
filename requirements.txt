@@ -1,0 +1,29 @@
+# MLX RAG - Full stack with torch/torchvision (recommended for Mac)
+mlx-lm>=0.18.0
+mlx-embeddings
+chromadb>=0.5.0
+llama-index>=0.11.0
+llama-index-vector-stores-chroma
+llama-index-embeddings-huggingface
+streamlit>=1.35.0
+pypdf
+pdfplumber
+python-docx
+watchdog
+networkx
+rank-bm25
+fastembed
+onnxruntime
+nltk
+transformers>=4.38.0
+sentence-transformers>=3.0.0
+# PyTorch with MPS support for Apple Silicon
+torch
+torchvision
+torchaudio
+
+# For bank T&C PDFs - better extraction than pypdf
+PyMuPDF>=1.23.0
+Pillow>=10.0.0
+# Optional OCR for scanned PDFs
+pytesseract>=0.3.10

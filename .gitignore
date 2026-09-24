@@ -1,0 +1,6 @@
+.DS_Store
+__pycache__
+chroma_db
+data
+models_cache
+storage
