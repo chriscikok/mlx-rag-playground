@@ -288,6 +288,10 @@ with tab_knowledge:
                             st.success(f"✅ Incrementally indexed {len(nodes)} chunks from {len(to_process)} files!")
                         else:
                             st.warning("No chunks extracted")
+                        # Always refresh status display
+                        st.cache_resource.clear()
+                        time.sleep(0.3)
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Incremental index failed: {e}")
                         import traceback; st.code(traceback.format_exc())
@@ -322,7 +326,11 @@ with tab_knowledge:
                                     "size": fp.stat().st_size
                                 }
                         save_manifest(manifest)
-                        st.success(f"✅ Full reindex done: {len(nodes)} chunks, {len(manifest)} files")
+                        st.cache_resource.clear()
+                        st.cache_data.clear() if hasattr(st, 'cache_data') else None
+                        st.success(f"Full reindex {len(nodes)} chunks. Cache rebuilt.")
+                        time.sleep(0.5)
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Full reindex failed: {e}")
                         import traceback; st.code(traceback.format_exc())

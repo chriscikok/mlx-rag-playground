@@ -1,233 +1,150 @@
 """
-Vector store module - Chroma wrapper
-Fixed: Handles readonly DB error (1032) - robust version with no client open on delete
-Supports incremental add/delete per file for sustainable knowledge management
+Vector store - Sustainable - fixes readonly 1032
 """
 import chromadb
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.core import VectorStoreIndex, StorageContext, Settings
 import config
 from .embeddings import get_embed_model
-import shutil
-import os
-import time
+import shutil, os, time
 from pathlib import Path
 
+COLLECTION = "rag_collection"
+
 def _fix_permissions(path: Path):
-    """Fix readonly permissions recursively"""
     try:
         if not path.exists():
             return
         for root, dirs, files in os.walk(path):
             for d in dirs:
-                try:
-                    os.chmod(os.path.join(root, d), 0o777)
-                except:
-                    pass
+                try: os.chmod(os.path.join(root, d), 0o777)
+                except: pass
             for f in files:
-                try:
-                    os.chmod(os.path.join(root, f), 0o666)
-                except:
-                    pass
-        try:
-            os.chmod(path, 0o777)
-        except:
-            pass
-    except Exception as e:
-        print(f"[Chroma] Permission fix failed: {e}")
-
-def _on_rm_error(func, path, exc_info):
-    try:
+                try: os.chmod(os.path.join(root, f), 0o666)
+                except: pass
         os.chmod(path, 0o777)
-    except:
-        pass
-    try:
-        func(path)
-    except Exception as e:
-        print(f"[Chroma] rm error handler failed for {path}: {e}")
+    except: pass
 
 def _force_delete_chroma():
-    """Force delete chroma_db WITHOUT opening a client first (avoids lock)"""
-    chroma_dir = Path(config.CHROMA_DIR)
-    storage_dir = Path(config.STORAGE_DIR)
-    print(f"[Chroma] Force deleting {chroma_dir} and {storage_dir}")
-    _fix_permissions(chroma_dir)
-    _fix_permissions(storage_dir)
-    for target_dir in [chroma_dir, storage_dir]:
-        if target_dir.exists():
-            for pattern in ["*.sqlite", "*.sqlite-wal", "*.sqlite-shm", "*.bin", "*.pkl"]:
-                for f in target_dir.rglob(pattern):
-                    try:
-                        os.chmod(f, 0o666)
-                        f.unlink()
-                    except:
-                        pass
-    for target_dir in [chroma_dir, storage_dir]:
-        if target_dir.exists():
+    print(f"[Chroma] Force deleting {config.CHROMA_DIR}")
+    _fix_permissions(Path(config.CHROMA_DIR))
+    # Kill wal/shm locks first
+    for pat in ["*.sqlite3", "*.sqlite3-wal", "*.sqlite3-shm", "*.sqlite"]:
+        for f in Path(config.CHROMA_DIR).rglob(pat):
             try:
-                shutil.rmtree(target_dir, onerror=_on_rm_error)
-            except:
-                try:
-                    shutil.rmtree(target_dir, ignore_errors=True)
-                except:
-                    pass
-            if target_dir.exists():
-                try:
-                    backup = target_dir.parent / f"{target_dir.name}_backup_{int(time.time())}"
-                    target_dir.rename(backup)
-                    shutil.rmtree(backup, ignore_errors=True)
-                except:
-                    pass
-    time.sleep(0.5)
+                os.chmod(f, 0o666)
+                f.unlink()
+            except: pass
+    shutil.rmtree(config.CHROMA_DIR, ignore_errors=True)
+    time.sleep(0.3)
+    Path(config.CHROMA_DIR).mkdir(parents=True, exist_ok=True)
 
 def get_chroma_collection():
     chroma_dir = Path(config.CHROMA_DIR)
-    try:
-        chroma_dir.mkdir(parents=True, exist_ok=True)
-    except:
-        pass
+    chroma_dir.mkdir(parents=True, exist_ok=True)
     _fix_permissions(chroma_dir)
     try:
         db = chromadb.PersistentClient(path=str(chroma_dir))
-        collection = db.get_or_create_collection("mlx_kb")
-        return collection
+        # FIX: use name= kwarg for new chroma API
+        try:
+            return db.get_or_create_collection(name=COLLECTION)
+        except TypeError:
+            return db.get_or_create_collection(COLLECTION)
     except Exception as e:
-        err_str = str(e).lower()
-        is_readonly = "readonly" in err_str or "1032" in str(e) or "attempt to write a readonly database" in err_str
-        if is_readonly:
-            print(f"[Chroma] Readonly error detected: {e}")
-            _force_delete_chroma()
-            chroma_dir.mkdir(parents=True, exist_ok=True)
+        if "readonly" in str(e).lower() or "1032" in str(e):
+            print(f"[Chroma] readonly detected, fixing perms and retrying: {e}")
             _fix_permissions(chroma_dir)
-            try:
-                db = chromadb.PersistentClient(path=str(chroma_dir))
-                return db.get_or_create_collection("mlx_kb")
-            except Exception as e2:
-                print(f"[Chroma] Still failing, using ephemeral: {e2}")
-                db = chromadb.EphemeralClient()
-                return db.get_or_create_collection("mlx_kb")
-        elif "dimension" in err_str or "embedding" in err_str:
-            print(f"[Chroma] Dimension mismatch: {e}, recreating...")
-            _force_delete_chroma()
-            chroma_dir.mkdir(parents=True, exist_ok=True)
+            # delete locks and retry
+            for pat in ["*.sqlite3-wal", "*.sqlite3-shm"]:
+                for f in chroma_dir.rglob(pat):
+                    try: f.unlink()
+                    except: pass
             db = chromadb.PersistentClient(path=str(chroma_dir))
-            return db.get_or_create_collection("mlx_kb")
-        else:
-            raise
+            try:
+                return db.get_or_create_collection(name=COLLECTION)
+            except TypeError:
+                return db.get_or_create_collection(COLLECTION)
+        raise
+
+def get_collection_count() -> int:
+    try:
+        return get_chroma_collection().count()
+    except:
+        return 0
 
 def delete_by_file_name(file_name: str) -> int:
-    """Delete all chunks for a given file_name from Chroma - for sustainable updates"""
     try:
-        collection = get_chroma_collection()
-        # Chroma stores metadata - query for file_name
-        results = collection.get(where={"file_name": file_name})
-        ids = results.get("ids", [])
-        if ids:
-            collection.delete(ids=ids)
-            print(f"[Chroma] Deleted {len(ids)} chunks for file {file_name}")
-            return len(ids)
-        # Try alternative metadata key
-        results = collection.get(where={"file_name": {"$eq": file_name}})
-        ids = results.get("ids", [])
-        if ids:
-            collection.delete(ids=ids)
-            print(f"[Chroma] Deleted {len(ids)} chunks for file {file_name} (eq)")
-            return len(ids)
-        # Fallback: scan all and filter by metadata in python
-        all_data = collection.get()
-        to_delete = []
-        for i, meta in enumerate(all_data.get("metadatas", [])):
-            if meta and meta.get("file_name") == file_name:
-                to_delete.append(all_data["ids"][i])
-        if to_delete:
-            collection.delete(ids=to_delete)
-            print(f"[Chroma] Deleted {len(to_delete)} chunks for file {file_name} (scan)")
-            return len(to_delete)
-        print(f"[Chroma] No chunks found for {file_name} to delete")
+        col = get_chroma_collection()
+        # Try where filter first
+        try:
+            res = col.get(where={"file_name": file_name})
+            ids = res.get("ids", [])
+            if ids:
+                col.delete(ids=ids)
+                return len(ids)
+        except: pass
+        # Fallback scan
+        all_data = col.get()
+        to_del = [all_data["ids"][i] for i, meta in enumerate(all_data.get("metadatas", [])) if meta and meta.get("file_name")==file_name]
+        if to_del:
+            col.delete(ids=to_del)
+            return len(to_del)
         return 0
     except Exception as e:
-        print(f"[Chroma] Delete by file failed for {file_name}: {e}")
-        import traceback; traceback.print_exc()
+        print(f"[Chroma] Delete failed {e}")
         return 0
 
 def add_nodes_to_index(nodes, embed_model=None):
-    """Incrementally add nodes to existing index (no clear)"""
     if not nodes:
         return None
     embed_model = embed_model or get_embed_model()
     Settings.embed_model = embed_model
-    try:
-        collection = get_chroma_collection()
-        vector_store = ChromaVectorStore(chroma_collection=collection)
-        storage_context = StorageContext.from_defaults(vector_store=vector_store)
-        index = VectorStoreIndex(nodes, storage_context=storage_context)
+
+    # FIX 1032: ensure perms before add
+    _fix_permissions(Path(config.CHROMA_DIR))
+
+    for attempt in range(2):
         try:
-            index.storage_context.persist(persist_dir=str(config.STORAGE_DIR))
-        except:
-            pass
-        print(f"[Chroma] Incrementally added {len(nodes)} nodes")
-        return index
-    except Exception as e:
-        print(f"[Chroma] add_nodes failed: {e}")
-        raise
+            col = get_chroma_collection()
+            vs = ChromaVectorStore(chroma_collection=col)
+            sc = StorageContext.from_defaults(vector_store=vs)
+            index = VectorStoreIndex(nodes, storage_context=sc)
+            return index
+        except Exception as e:
+            if "readonly" in str(e).lower() or "1032" in str(e) and attempt==0:
+                print(f"[Chroma] add_nodes failed readonly, fixing and retry: {e}")
+                _fix_permissions(Path(config.CHROMA_DIR))
+                for pat in ["*.sqlite3-wal", "*.sqlite3-shm"]:
+                    for f in Path(config.CHROMA_DIR).rglob(pat):
+                        try: f.unlink()
+                        except: pass
+                time.sleep(0.5)
+                continue
+            print(f"[Chroma] add_nodes failed: {e}")
+            raise
 
 def get_index(nodes=None, embed_model=None):
     embed_model = embed_model or get_embed_model()
     Settings.embed_model = embed_model
-    try:
-        collection = get_chroma_collection()
-        vector_store = ChromaVectorStore(chroma_collection=collection)
-        if nodes:
-            print(f"[Chroma] Indexing {len(nodes)} nodes...")
-            storage_context = StorageContext.from_defaults(vector_store=vector_store)
-            index = VectorStoreIndex(nodes, storage_context=storage_context)
-            try:
-                index.storage_context.persist(persist_dir=str(config.STORAGE_DIR))
-            except Exception as e:
-                if "readonly" in str(e).lower() or "1032" in str(e):
-                    _fix_permissions(Path(config.STORAGE_DIR))
-                    try:
-                        index.storage_context.persist(persist_dir=str(config.STORAGE_DIR))
-                    except:
-                        pass
-                else:
-                    raise
-        else:
-            index = VectorStoreIndex.from_vector_store(vector_store=vector_store, embed_model=embed_model)
-        return index
-    except Exception as e:
-        if "readonly" in str(e).lower() or "1032" in str(e):
-            print(f"[Chroma] Readonly error in get_index: {e}, force clearing...")
-            _force_delete_chroma()
-            try:
-                collection = get_chroma_collection()
-                vector_store = ChromaVectorStore(chroma_collection=collection)
-                if nodes:
-                    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-                    index = VectorStoreIndex(nodes, storage_context=storage_context)
-                    try:
-                        index.storage_context.persist(persist_dir=str(config.STORAGE_DIR))
-                    except:
-                        pass
-                    return index
-                else:
-                    return VectorStoreIndex.from_vector_store(vector_store=vector_store, embed_model=embed_model)
-            except Exception as e2:
-                db = chromadb.EphemeralClient()
-                collection = db.get_or_create_collection("mlx_kb")
-                vector_store = ChromaVectorStore(chroma_collection=collection)
-                if nodes:
-                    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-                    return VectorStoreIndex(nodes, storage_context=storage_context)
-                else:
-                    return VectorStoreIndex.from_vector_store(vector_store=vector_store, embed_model=embed_model)
-        raise
+    col = get_chroma_collection()
+    vs = ChromaVectorStore(chroma_collection=col)
+    if nodes:
+        sc = StorageContext.from_defaults(vector_store=vs)
+        index = VectorStoreIndex(nodes, storage_context=sc, embed_model=embed_model)
+    else:
+        index = VectorStoreIndex.from_vector_store(vector_store=vs, embed_model=embed_model)
+    return index
 
-# Public aliases
 def force_delete_chroma():
     return _force_delete_chroma()
 
-def fix_permissions(path):
-    return _fix_permissions(path)
+def fix_permissions():  # <-- THIS WAS MISSING
+    _fix_permissions(Path(config.CHROMA_DIR))
+    _fix_permissions(Path(config.STORAGE_DIR))
 
-__all__ = ["get_index", "get_chroma_collection", "_fix_permissions", "_force_delete_chroma", "force_delete_chroma", "fix_permissions", "delete_by_file_name", "add_nodes_to_index"]
+# Aliases for old code
+def clear_nodes_cache():
+    pass
+
+def get_indexed_files_summary():
+    return {"total_files": 0, "total_chunks": get_collection_count()}
