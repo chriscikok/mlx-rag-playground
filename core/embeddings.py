@@ -1,16 +1,28 @@
 """
 Embeddings - torch-enabled version
 Uses BAAI/bge-m3 on MPS (Apple Silicon) with torch, falls back to fastembed ONNX
+Fixed SSL issue for macOS Python 3.14
 """
 import config
 from typing import List
+import os
+import ssl
+import certifi
+
+# Fix SSL cert issue on macOS Python.org installs
+# This sets SSL cert path for HuggingFace downloads
+try:
+    os.environ['SSL_CERT_FILE'] = certifi.where()
+    os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+except:
+    pass
 
 def get_embed_model():
     """
     Try HuggingFace BGE-M3 with torch MPS first (best quality),
     fall back to fastembed ONNX if torch not available
     """
-    # Try torch path first (since user wants to install torchvision)
     try:
         print(f"[Embeddings] Loading {config.EMBED_MODEL_ID} on mps (torch)...")
         from llama_index.embeddings.huggingface import HuggingFaceEmbedding

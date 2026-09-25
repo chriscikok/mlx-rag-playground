@@ -14,22 +14,20 @@ LLM_MODEL_ID = "mlx-community/Qwen2.5-7B-Instruct-4bit"
 GRADER_MODEL_ID = "mlx-community/Qwen2.5-1.5B-Instruct-4bit"
 EMBED_MODEL_ID = "BAAI/bge-m3"  # 8192 tokens max, 1024 dim
 
-# Chunking - General purpose balanced for mixed docs
-# For bge-m3, 512 tokens ~ 2000 chars is common, but smaller = higher precision
-# 512 is good for general KB: preserves 2-3 paragraphs, tables, Q&A pairs
-# If your docs are mostly short clauses (T&C), use 380-450
-# If mostly long reports, use 600-800
-CHUNK_SIZE = 180  # Increased from 100 to 180 to keep Online/Branch rows together (was splitting tables)
-CHUNK_OVERLAP = 30
+# Chunking - Phase 1: SemanticSplitter + Table-aware
+# bge-m3 handles 8192 tokens, but 512 tokens ~ 2000 chars is sweet spot for semantic chunks
+CHUNK_SIZE = 512
+CHUNK_OVERLAP = 50
+CHUNKING_MODE = "semantic"  # semantic | sentence | hierarchical
 
 # Retrieval
-TOP_K_VECTOR = 15  # More candidates for multi-hop (interest rate + min deposit are different chunks)
+TOP_K_VECTOR = 15
 TOP_K_BM25 = 15
-TOP_K_RERANK = 8  # Return 8 chunks to include table + conditions
+TOP_K_RERANK = 8
 
 # Generation
-MAX_TOKENS = 768  # Longer for table reasoning
-TEMPERATURE = 0.1  # Lower temp for precise number extraction
+MAX_TOKENS = 768
+TEMPERATURE = 0.1
 CTX_SIZE = 2048
 
 # Graph

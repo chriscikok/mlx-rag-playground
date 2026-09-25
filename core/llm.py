@@ -1,6 +1,7 @@
 """
-MLX LLM wrapper - reusable across all RAG types
-Supports streaming for UI
+MLX LLM wrapper - General purpose, table-aware but not document-specific
+Phase 1: No hardcoded channel/branch logic
+Fixed for mlx-lm 0.18+ API changes (temp -> sampler)
 """
 from mlx_lm import load, generate
 from mlx_lm.generate import stream_generate
@@ -13,55 +14,111 @@ class MLXLLM:
         self.model, self.tokenizer = load(model_id)
     
     def generate(self, prompt: str, max_tokens=None, temp=None, verbose=False):
-        return generate(
-            self.model, self.tokenizer,
-            prompt=prompt,
-            max_tokens=max_tokens or config.MAX_TOKENS,
-            temp=temp or config.TEMPERATURE,
-            verbose=verbose
-        )
+        max_toks = max_tokens or config.MAX_TOKENS
+        temperature = temp or config.TEMPERATURE
+        
+        # mlx-lm API changed over versions: older uses temp=, newer uses temperature= or sampler
+        # Try in order to be compatible
+        try:
+            return generate(
+                self.model, self.tokenizer,
+                prompt=prompt,
+                max_tokens=max_toks,
+                temp=temperature,
+                verbose=verbose
+            )
+        except TypeError as e:
+            if "temp" in str(e) or "unexpected keyword" in str(e):
+                try:
+                    # Newer API: temperature
+                    return generate(
+                        self.model, self.tokenizer,
+                        prompt=prompt,
+                        max_tokens=max_toks,
+                        temperature=temperature,
+                        verbose=verbose
+                    )
+                except TypeError:
+                    # Even newer API: sampler based or no temp arg
+                    try:
+                        from mlx_lm.sample_utils import make_sampler
+                        sampler = make_sampler(temp=temperature)
+                        return generate(
+                            self.model, self.tokenizer,
+                            prompt=prompt,
+                            max_tokens=max_toks,
+                            sampler=sampler,
+                            verbose=verbose
+                        )
+                    except Exception:
+                        # Fallback: no temp at all
+                        return generate(
+                            self.model, self.tokenizer,
+                            prompt=prompt,
+                            max_tokens=max_toks,
+                            verbose=verbose
+                        )
+            else:
+                raise
     
     def stream(self, prompt: str, max_tokens=None):
-        # Yields tokens for Streamlit
-        for token in stream_generate(
-            self.model, self.tokenizer,
-            prompt=prompt,
-            max_tokens=max_tokens or config.MAX_TOKENS
-        ):
-            yield token.text
+        max_toks = max_tokens or config.MAX_TOKENS
+        # Try with temp fallback as well
+        try:
+            for token in stream_generate(
+                self.model, self.tokenizer,
+                prompt=prompt,
+                max_tokens=max_toks,
+                temp=config.TEMPERATURE
+            ):
+                yield token.text
+        except TypeError:
+            try:
+                for token in stream_generate(
+                    self.model, self.tokenizer,
+                    prompt=prompt,
+                    max_tokens=max_toks,
+                    temperature=config.TEMPERATURE
+                ):
+                    yield token.text
+            except TypeError:
+                # Fallback no temp
+                for token in stream_generate(
+                    self.model, self.tokenizer,
+                    prompt=prompt,
+                    max_tokens=max_toks
+                ):
+                    yield token.text
     
     def build_rag_prompt(self, query, context_nodes):
-        # FIX: Sort by score descending so most relevant appears first
-        # LLM tends to focus on first chunks in context
         sorted_nodes = sorted(context_nodes, key=lambda x: x.score if hasattr(x, 'score') else 0, reverse=True)
-
+        
         context_parts = []
         for i, n in enumerate(sorted_nodes):
-            # Include score in context for debugging but LLM should ignore
             fname = n.metadata.get('file_name', 'doc')
             context_parts.append(f"[Chunk {i+1} from {fname} - relevance {n.score:.4f}]:\n{n.text}")
-
+        
         context_str = "\n\n---\n\n".join(context_parts)
-
+        
         return f"""<|im_start|>system
-You are a precise local knowledge base assistant. You excel at extracting numbers and tables. 
+You are a precise knowledge base assistant. You excel at extracting structured information from documents.
 
-THINKING PROCESS (do this internally, then answer):
-1. Identify what the user asks - note if it specifies a channel/method (online, branch, mobile, etc.)
-2. Scan Context for relevant information - pay attention to markdown tables with [TABLE_START] markers
-3. For numbers: preserve exact values, currencies, percentages, date ranges
+THINKING PROCESS:
+1. Identify what the user asks
+2. Scan Context for relevant information, including tables marked [TABLE_START]
+3. Preserve exact values: numbers, currencies, percentages, dates
 4. If multiple chunks contain parts, combine them logically
-5. If table is split across chunks, reconstruct it
+5. If table is split, reconstruct it
 
 RULES:
-- Answer ONLY using Context below. Be precise with numbers and preserve exact values.
-- For tables: reproduce relevant rows as markdown table. 
-- When Context contains a table with multiple rows, extract ALL matching rows, not just first one
+- Answer ONLY using Context below
+- Be precise with numbers and preserve exact values
+- For tables: reproduce relevant rows as markdown table
+- If question specifies a filter, extract matching row(s)
+- If Context contains multiple relevant rows, include all
 - Cite sources like [Chunk 1] for each fact
-- If Context has conflicting info, prioritize higher relevance (lower chunk number)
-- If answer requires calculation (e.g., total interest period), show your reasoning briefly
-- If information not in Context, say "I don't have that in the knowledge base - retrieved chunks don't contain [specific field]"
-- Be concise but include all relevant numbers: rates, dates, min/max, currencies
+- If info not in Context, say "I don't have that in the knowledge base"
+- Include all relevant numbers: rates, dates, min/max, currencies
 <|im_end|>
 <|im_start|>user
 Context:

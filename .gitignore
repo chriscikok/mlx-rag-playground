@@ -4,3 +4,6 @@ chroma_db
 data
 models_cache
 storage
+test
+eval_results*.json
+eval_dataset.json

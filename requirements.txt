@@ -1,29 +1,55 @@
-# MLX RAG - Full stack with torch/torchvision (recommended for Mac)
+# Core MLX
 mlx-lm>=0.18.0
-mlx-embeddings
-chromadb>=0.5.0
-llama-index>=0.11.0
-llama-index-vector-stores-chroma
-llama-index-embeddings-huggingface
-streamlit>=1.35.0
-pypdf
-pdfplumber
-python-docx
-watchdog
-networkx
-rank-bm25
-fastembed
-onnxruntime
-nltk
-transformers>=4.38.0
-sentence-transformers>=3.0.0
-# PyTorch with MPS support for Apple Silicon
-torch
-torchvision
-torchaudio
+mlx>=0.20.0
 
-# For bank T&C PDFs - better extraction than pypdf
-PyMuPDF>=1.23.0
-Pillow>=10.0.0
-# Optional OCR for scanned PDFs
+# Embeddings
+sentence-transformers>=3.0.0
+transformers>=4.40.0
+torch>=2.0.0
+torchvision>=0.16.0
+
+# Vector DB
+chromadb>=0.5.0
+
+# LlamaIndex - Phase 1 SemanticSplitter
+llama-index>=0.11.0
+llama-index-core>=0.11.0
+llama-index-vector-stores-chroma>=0.3.0
+llama-index-embeddings-huggingface>=0.3.0
+llama-index-retrievers-bm25>=0.3.0
+llama-index-postprocessor-colbert-rerank>=0.2.0
+
+# PDF extraction - Phase 1 Camelot focus
+# OCR fallback for scanned PDFs
 pytesseract>=0.3.10
+pdf2image>=1.16.0
+Pillow>=10.0.0
+pdfplumber>=0.11.0
+pymupdf>=1.24.0
+pypdf>=4.2.0
+python-docx>=1.1.0
+
+# Phase 1 - Camelot for borderless tables (fixed: no [cv] extra)
+# camelot-py[cv] pulls pdftopng which is broken on Py3.11+/Apple Silicon
+# Use base camelot + opencv + ghostscript installed via brew
+camelot-py>=0.10.0
+opencv-python>=4.12.0.88
+pandas>=2.2.0
+numpy>=2.3.0
+
+# Optional - only if you need tabula (requires Java)
+# tabula-py==2.9.0
+
+# Reranking & BM25
+rank-bm25>=0.2.2
+
+# UI
+streamlit>=1.35.0
+
+# Utils
+watchdog>=4.0.0
+networkx>=3.0
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+
+certifi>=2024.0.0
