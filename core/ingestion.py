@@ -265,13 +265,30 @@ def get_semantic_splitter(embed_model=None):
             chunk_overlap=config.CHUNK_OVERLAP,
         )
 
-def load_and_chunk(data_dir=None, embed_model=None):
+def load_and_chunk(data_dir=None, embed_model=None, specific_files=None):
+    """
+    Load and chunk documents
+    Args:
+        data_dir: folder to scan (if specific_files is None)
+        embed_model: embedding model for SemanticSplitter
+        specific_files: Optional List[Path] - only process these files (for incremental updates)
+    """
     data_dir = Path(data_dir) if data_dir else config.DATA_DIR
-    print(f"Loading docs from {data_dir}... mode={config.CHUNKING_MODE}")
+    if specific_files:
+        file_list = [Path(p) for p in specific_files if Path(p).exists()]
+        print(f"Loading {len(file_list)} specific files... mode={config.CHUNKING_MODE}")
+    else:
+        print(f"Loading docs from {data_dir}... mode={config.CHUNKING_MODE}")
+        supported_exts = {".pdf", ".docx", ".md", ".txt", ".html"}
+        file_list = []
+        for file_path in data_dir.rglob("*"):
+            if not file_path.is_file() or file_path.suffix.lower() not in supported_exts:
+                continue
+            file_list.append(file_path)
+    
     docs = []
-    supported_exts = {".pdf", ".docx", ".md", ".txt", ".html"}
-    for file_path in data_dir.rglob("*"):
-        if not file_path.is_file() or file_path.suffix.lower() not in supported_exts:
+    for file_path in file_list:
+        if not file_path.is_file():
             continue
         print(f"[Ingestion] Processing {file_path.name}...")
         text = ""

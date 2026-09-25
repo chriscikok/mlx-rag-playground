@@ -8,6 +8,7 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 CHROMA_DIR = BASE_DIR / "chroma_db"
 STORAGE_DIR = BASE_DIR / "storage"
+TEST_DIR = BASE_DIR / "test"
 
 # Models - change here to switch globally
 LLM_MODEL_ID = "mlx-community/Qwen2.5-7B-Instruct-4bit"
